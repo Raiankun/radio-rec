@@ -1,7 +1,23 @@
 {
   "output_dir": "./recordings",
   "rules": [
-    { "stations": ["TBS"], "keywords": ["JUNK"] },
-    { "stations": ["LFR", "QRR"], "keywords": ["オールナイトニッポン"] }
-  ]
+    {
+      "stations": [
+        "TBS"
+      ],
+      "keywords": [
+        "JUNK"
+      ]
+    },
+    {
+      "stations": [
+        "LFR",
+        "QRR"
+      ],
+      "keywords": [
+        "オールナイトニッポン"
+      ]
+    }
+  ],
+  "reservations": []
 }

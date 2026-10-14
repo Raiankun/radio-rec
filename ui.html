@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>radirec</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f6f6f4; --panel: #fff; --text: #1d1d1b; --muted: #6d6d68; --line: #e3e3de;
+  --accent: #d6336c; --accent-soft: #fbe4ec; --ok: #2b8a3e; --ok-soft: #e3f4e6;
+  --warn: #b26b00; --warn-soft: #fdf0d9; --info: #1c6dd0; --info-soft: #e1edfb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --text: #ececea; --muted: #9a9a94; --line: #33332f;
+    --accent: #f06595; --accent-soft: #3d1d29; --ok: #69db7c; --ok-soft: #1c3322;
+    --warn: #ffc078; --warn-soft: #3a2c16; --info: #74c0fc; --info-soft: #182c40;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar { max-width: 960px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+h1 span { color: var(--accent); }
+.area { color: var(--muted); font-size: 12px; }
+nav { display: flex; gap: 4px; margin-left: auto; }
+nav button { border: 0; background: none; color: var(--muted); padding: 6px 10px; border-radius: 6px; cursor: pointer; font: inherit; }
+nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+nav .count[hidden] { display: none; }
+nav .count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px;
+  background: var(--accent); color: #fff; font-size: 11px; }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.err { background: var(--warn-soft); color: var(--warn); padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 16px;
+  padding: 4px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.days { margin: 12px 0 8px; }
+.prog { display: grid; grid-template-columns: 92px 1fr auto; gap: 10px; align-items: center;
+  padding: 10px 4px; border-top: 1px solid var(--line); }
+.prog:first-child { border-top: 0; }
+.prog.now { background: var(--info-soft); border-radius: 8px; }
+.time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.title { font-weight: 600; }
+.pfm { color: var(--muted); font-size: 12px; }
+.badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px; margin-left: 6px; font-weight: 500; vertical-align: 1px; }
+.b-ok { background: var(--ok-soft); color: var(--ok); }
+.b-info { background: var(--info-soft); color: var(--info); }
+.b-warn { background: var(--warn-soft); color: var(--warn); }
+.b-acc { background: var(--accent-soft); color: var(--accent); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+button.btn { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px;
+  padding: 5px 12px; cursor: pointer; font: inherit; font-size: 13px; white-space: nowrap; }
+button.btn.ghost { background: transparent; color: var(--accent); }
+button.btn.plain { background: transparent; color: var(--muted); border-color: var(--line); }
+button.btn:disabled { opacity: .45; cursor: default; }
+input[type=text], input[type=number] { font: inherit; padding: 6px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--bg); color: var(--text); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rule { border-top: 1px solid var(--line); padding: 12px 0; }
+.rule:first-of-type { border-top: 0; }
+.rule label { display: block; font-size: 12px; color: var(--muted); margin: 6px 0 4px; }
+.rule input[type=text] { flex: 1; min-width: 0; }
+.job { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.job:first-child { border-top: 0; }
+.progress { grid-column: 1 / -1; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.progress div { height: 100%; background: var(--accent); transition: width .5s; }
+.file { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); align-items: center; }
+.file:first-child { border-top: 0; }
+.muted { color: var(--muted); font-size: 12px; }
+.empty { color: var(--muted); text-align: center; padding: 24px 0; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+.player { position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); padding: 8px 16px; display: none; }
+.player.on { display: block; }
+.player .inner { max-width: 960px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
+.player audio { flex: 1; min-width: 0; }
+.player .name { font-size: 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); padding: 18px; max-width: 90vw; }
+dialog::backdrop { background: rgba(0,0,0,.35); }
+@media (max-width: 600px) {
+  .prog { grid-template-columns: 1fr; gap: 4px; }
+  .actions { justify-content: flex-start; }
+  nav { margin-left: 0; width: 100%; overflow-x: auto; }
+}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <h1>radi<span>rec</span></h1>
+  <span class="area" id="area"></span>
+  <button class="btn ghost" onclick="openLive()">● ライブ録音</button>
+  <nav id="nav">
+    <button data-tab="programs" class="on">番組表</button>
+    <button data-tab="auto">自動録音</button>
+    <button data-tab="jobs">録音状況<span class="count" id="jobcount" hidden></span></button>
+    <button data-tab="files">録音済み</button>
+  </nav>
+</div></header>
+
+<main>
+  <div class="err" id="err" hidden></div>
+
+  <section id="tab-programs">
+    <div class="card">
+      <div class="chips" id="stations"></div>
+      <div class="chips days" id="days"></div>
+      <div id="proglist"><div class="empty">局を選んでください</div></div>
+    </div>
+  </section>
+
+  <section id="tab-auto" hidden>
+    <div class="card">
+      <h2>キーワード自動録音</h2>
+      <p class="muted">番組名・出演者・説明にキーワードが含まれる番組を、放送終了後に自動で録音します（UI起動中は30分ごとにチェック）。</p>
+      <div id="rules"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn plain" onclick="addRule()">＋ ルールを追加</button>
+        <button class="btn" onclick="saveRules()">保存</button>
+        <span class="muted" id="rulesmsg"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>予約</h2>
+      <div id="reservations"></div>
+    </div>
+    <div class="card row">
+      <button class="btn ghost" onclick="runAuto()">今すぐチェック</button>
+      <span class="muted" id="autoinfo"></span>
+    </div>
+  </section>
+
+  <section id="tab-jobs" hidden>
+    <div class="card" id="jobs"></div>
+  </section>
+
+  <section id="tab-files" hidden>
+    <div class="card" id="files"></div>
+  </section>
+</main>
+
+<div class="player" id="player"><div class="inner">
+  <span class="name" id="playname"></span>
+  <audio id="audio" controls></audio>
+  <button class="btn plain" onclick="closePlayer()">✕</button>
+</div></div>
+
+<dialog id="livedlg">
+  <h2>ライブ録音</h2>
+  <div class="row" style="margin:10px 0">
+    <select id="livest" style="font:inherit;padding:6px"></select>
+    <input type="number" id="livemin" value="60" min="1" style="width:80px"> 分
+  </div>
+  <div class="row" style="justify-content:flex-end">
+    <button class="btn plain" onclick="livedlg.close()">キャンセル</button>
+    <button class="btn" onclick="startLive()">録音開始</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const WD = "日月火水木金土";
+let S = { stations: [], jobs: [], rules: [], reservations: [] };
+let cur = { station: null, day: null, data: null };
+let rulesDirty = false, lastJobSig = "";
+
+function store(k, v) { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch (e) {} return v; }
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const j = await r.json();
+  if (j && j.error) throw new Error(j.error);
+  return j;
+}
+
+function hm(t) { return t.slice(8, 10) + ":" + t.slice(10, 12); }
+function dayLabel(d) {
+  const dt = new Date(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8));
+  return `${+d.slice(4, 6)}/${+d.slice(6, 8)}(${WD[dt.getDay()]})`;
+}
+// radiko の1日は朝5時始まり
+function radikoDay(ft) {
+  if (+ft.slice(8, 10) >= 5) return ft.slice(0, 8);
+  const dt = new Date(+ft.slice(0, 4), +ft.slice(4, 6) - 1, +ft.slice(6, 8) - 1);
+  return `${dt.getFullYear()}${String(dt.getMonth() + 1).padStart(2, "0")}${String(dt.getDate()).padStart(2, "0")}`;
+}
+function stName(id) { return (S.stations.find((s) => s.id === id) || {}).name || id; }
+
+// ---------- タブ ----------
+$("nav").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  showTab(b.dataset.tab);
+});
+function showTab(t) {
+  document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll("main section").forEach((s) => (s.hidden = s.id !== "tab-" + t));
+  store("tab", t);
+  if (t === "files") loadFiles();
+  if (t === "auto") renderAuto();
+}
+
+// ---------- 状態 ----------
+async function refresh() {
+  try {
+    S = await api("/api/state");
+  } catch (e) { $("err").hidden = false; $("err").textContent = "UIサーバーに接続できません（radirec.py ui が起動しているか確認）"; return; }
+  $("err").hidden = !S.error;
+  $("err").innerHTML = S.error ? esc(S.error) + ' <button class="btn plain" onclick="reconnect()">再接続</button>' : "";
+  $("area").textContent = S.area ? `エリア ${S.area}` : "";
+  renderStations();
+  renderJobs();
+  if (!rulesDirty && !$("tab-auto").hidden) renderAuto();
+  const sig = S.jobs.map((j) => j.id + j.status).join();
+  if (sig !== lastJobSig) {
+    if (lastJobSig) { if (cur.station) loadPrograms(cur.station, true); if (!$("tab-files").hidden) loadFiles(); }
+    lastJobSig = sig;
+  }
+}
+async function reconnect() { await api("/api/reconnect", {}); refresh(); }
+
+function renderStations() {
+  const el = $("stations");
+  if (el.dataset.n == S.stations.length) {
+    el.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.id === cur.station));
+    return;
+  }
+  el.dataset.n = S.stations.length;
+  el.innerHTML = S.stations.map((s) => `<button class="chip" data-id="${esc(s.id)}">${esc(s.name)}</button>`).join("");
+  el.onclick = (e) => { const c = e.target.closest(".chip"); if (c) loadPrograms(c.dataset.id); };
+  const saved = store("station");
+  if (!cur.station && saved && S.stations.some((s) => s.id === saved)) loadPrograms(saved);
+}
+
+// ---------- 番組表 ----------
+async function loadPrograms(id, quiet) {
+  if (cur.station !== id) cur.day = null;
+  cur.station = id; store("station", id);
+  renderStations();
+  if (!quiet) $("proglist").innerHTML = '<div class="empty">読み込み中…</div>';
+  try { cur.data = await api("/api/programs?station=" + encodeURIComponent(id)); }
+  catch (e) { $("proglist").innerHTML = `<div class="empty">取得失敗: ${esc(e.message)}</div>`; return; }
+  const days = [...new Set(cur.data.programs.map((p) => radikoDay(p.ft)))];
+  if (!cur.day || !days.includes(cur.day)) cur.day = days.includes(radikoDay(cur.data.now)) ? radikoDay(cur.data.now) : days[0];
+  $("days").innerHTML = days.map((d) => `<button class="chip ${d === cur.day ? "on" : ""}" data-d="${d}">${dayLabel(d)}</button>`).join("");
+  $("days").onclick = (e) => { const c = e.target.closest(".chip"); if (c) { cur.day = c.dataset.d; loadPrograms(cur.station, true); } };
+  renderPrograms();
+}
+
+function renderPrograms() {
+  const now = cur.data.now;
+  const list = cur.data.programs.filter((p) => radikoDay(p.ft) === cur.day);
+  $("proglist").innerHTML = list.map((p, i) => {
+    const past = p.to <= now, onair = p.ft <= now && now < p.to;
+    let badges = "", acts = "";
+    if (p.matched) badges += '<span class="badge b-acc">キーワード</span>';
+    if (onair) badges += '<span class="badge b-info">放送中</span>';
+    if (p.recorded) badges += '<span class="badge b-ok">録音済み</span>';
+    else if (p.active) badges += '<span class="badge b-warn">録音中</span>';
+    else if (p.reserved) badges += '<span class="badge b-info">予約済み</span>';
+    if (past && !p.recorded && !p.active) acts += `<button class="btn" data-a="tf" data-i="${i}">録音</button>`;
+    if (past && p.recorded) acts += `<button class="btn plain" data-a="tf" data-i="${i}">再録音</button>`;
+    if (onair) acts += `<button class="btn ghost" data-a="live" data-i="${i}">今からライブ録音</button>`;
+    if (!past && !p.recorded) acts += p.reserved
+      ? `<button class="btn plain" data-a="unres" data-i="${i}">予約解除</button>`
+      : `<button class="btn ${onair ? "ghost" : ""}" data-a="res" data-i="${i}">${onair ? "放送後に全編録音" : "予約"}</button>`;
+    return `<div class="prog ${onair ? "now" : ""}">
+      <div class="time">${hm(p.ft)}–${hm(p.to)}</div>
+      <div><div class="title">${esc(p.title)}${badges}</div><div class="pfm">${esc(p.pfm)}</div></div>
+      <div class="actions">${acts}</div></div>`;
+  }).join("") || '<div class="empty">番組がありません</div>';
+  $("proglist").onclick = async (e) => {
+    const b = e.target.closest("button[data-a]"); if (!b) return;
+    const p = list[+b.dataset.i], body = { station: p.station, ft: p.ft, to: p.to, title: p.title };
+    b.disabled = true;
+    try {
+      if (b.dataset.a === "tf") await api("/api/timefree", body);
+      if (b.dataset.a === "res") await api("/api/reserve", { ...body, on: true });
+      if (b.dataset.a === "unres") await api("/api/reserve", { ...body, on: false });
+      if (b.dataset.a === "live") {
+        const end = new Date(+p.to.slice(0,4), +p.to.slice(4,6)-1, +p.to.slice(6,8), +p.to.slice(8,10), +p.to.slice(10,12));
+        await api("/api/live", { station: p.station, minutes: Math.max(1, Math.ceil((end - Date.now()) / 60000)), title: p.title });
+      }
+    } catch (err) { alert(err.message); }
+    await refresh(); loadPrograms(cur.station, true);
+  };
+}
+
+// ---------- 自動録音 ----------
+function renderAuto() {
+  const rules = S.rules.length ? S.rules : [];
+  $("rules").innerHTML = rules.map((r, i) => ruleHtml(r, i)).join("") || '<div class="empty">ルールがありません</div>';
+  $("reservations").innerHTML = S.reservations.length ? S.reservations.slice().sort((a, b) => a.ft.localeCompare(b.ft)).map((r) =>
+    `<div class="file"><div><div class="title">${esc(r.title)}</div>
+      <div class="muted">${esc(stName(r.station))}・${dayLabel(r.ft.slice(0, 8))} ${hm(r.ft)}–${hm(r.to)}</div></div>
+      <button class="btn plain" data-r='${esc(JSON.stringify(r))}'>解除</button></div>`).join("")
+    : '<div class="empty">番組表の「予約」から追加できます</div>';
+  $("reservations").onclick = async (e) => {
+    const b = e.target.closest("button[data-r]"); if (!b) return;
+    await api("/api/reserve", { ...JSON.parse(b.dataset.r), on: false }); refresh().then(renderAuto);
+  };
+  const t = S.auto_last;
+  $("autoinfo").textContent = (t ? `前回チェック ${hm(t)}` : "") + (S.auto_next_min != null ? `・次回 約${S.auto_next_min}分後` : "");
+}
+function ruleHtml(r, i) {
+  const chips = S.stations.map((s) => `<button class="chip ${r.stations.includes(s.id) ? "on" : ""}" data-id="${esc(s.id)}">${esc(s.name)}</button>`).join("");
+  return `<div class="rule" data-i="${i}">
+    <label>対象の局</label><div class="chips">${chips}</div>
+    <label>キーワード（カンマ区切り、どれか1つに一致すれば録音）</label>
+    <div class="row"><input type="text" value="${esc(r.keywords.join(", "))}" placeholder="例: オールナイトニッポン, 星野源">
+    <button class="btn plain" data-del>削除</button></div></div>`;
+}
+function collectRules() {
+  return [...document.querySelectorAll("#rules .rule")].map((el) => ({
+    stations: [...el.querySelectorAll(".chip.on")].map((c) => c.dataset.id),
+    keywords: el.querySelector("input").value.split(/[,、，]/).map((s) => s.trim()).filter(Boolean),
+  }));
+}
+$("rules").addEventListener("click", (e) => {
+  const c = e.target.closest(".chip");
+  if (c) { c.classList.toggle("on"); rulesDirty = true; $("rulesmsg").textContent = "未保存"; }
+  if (e.target.closest("[data-del]")) {
+    const rules = collectRules(); rules.splice(+e.target.closest(".rule").dataset.i, 1);
+    S.rules = rules; rulesDirty = true; renderAuto(); $("rulesmsg").textContent = "未保存";
+  }
+});
+$("rules").addEventListener("input", () => { rulesDirty = true; $("rulesmsg").textContent = "未保存"; });
+function addRule() {
+  S.rules = [...collectRules(), { stations: cur.station ? [cur.station] : [], keywords: [] }];
+  rulesDirty = true; renderAuto(); $("rulesmsg").textContent = "未保存";
+}
+async function saveRules() {
+  const rules = collectRules();
+  const bad = rules.filter((r) => !r.stations.length || !r.keywords.length).length;
+  await api("/api/rules", { rules });
+  rulesDirty = false; await refresh(); renderAuto();
+  $("rulesmsg").textContent = bad ? `保存しました（局かキーワードが空のルール${bad}件は除外）` : "保存しました";
+  if (cur.station) loadPrograms(cur.station, true);
+}
+async function runAuto() { await api("/api/auto/run", {}); $("autoinfo").textContent = "チェック中…"; setTimeout(refresh, 3000); }
+
+// ---------- 録音状況 ----------
+function renderJobs() {
+  const running = S.jobs.filter((j) => j.status === "running" || j.status === "queued").length;
+  $("jobcount").hidden = !running; $("jobcount").textContent = running;
+  const label = { queued: ["待機中", "b-info"], running: ["録音中", "b-warn"], done: ["完了", "b-ok"], failed: ["失敗", "b-acc"] };
+  $("jobs").innerHTML = S.jobs.map((j) => {
+    const [l, c] = label[j.status];
+    const when = j.kind === "live" ? `ライブ ${j.minutes}分・${hm(j.ft)}開始` : `タイムフリー・${dayLabel(j.ft.slice(0, 8))} ${hm(j.ft)}–${hm(j.to)}`;
+    return `<div class="job"><div><span class="title">${esc(j.title || stName(j.station))}</span><span class="badge ${c}">${l}</span>
+      <div class="muted">${esc(stName(j.station))}・${when}${j.error ? "・" + esc(j.error) : ""}</div></div>
+      <div class="muted">${j.status === "running" ? Math.round(j.progress * 100) + "%" : ""}</div>
+      ${j.status === "running" ? `<div class="progress"><div style="width:${j.progress * 100}%"></div></div>` : ""}</div>`;
+  }).join("") || '<div class="empty">まだ録音していません</div>';
+}
+
+// ---------- 録音済み ----------
+async function loadFiles() {
+  const files = await api("/api/recordings");
+  $("files").innerHTML = files.map((f) => `<div class="file">
+      <div><div class="title">${esc(f.name.replace(/\.m4a$/, ""))}</div><div class="muted">${(f.size / 1048576).toFixed(1)} MB</div></div>
+      <div class="actions"><button class="btn ghost" data-play="${esc(f.name)}">▶ 再生</button>
+      <button class="btn plain" data-delf="${esc(f.name)}">削除</button></div></div>`).join("")
+    || '<div class="empty">録音したファイルはまだありません</div>';
+}
+$("files").addEventListener("click", async (e) => {
+  const p = e.target.closest("[data-play]"), d = e.target.closest("[data-delf]");
+  if (p) { $("audio").src = "/rec/" + encodeURIComponent(p.dataset.play); $("playname").textContent = p.dataset.play; $("player").classList.add("on"); $("audio").play(); }
+  if (d && confirm(d.dataset.delf + " を削除しますか？")) { await api("/api/recordings/delete", { name: d.dataset.delf }); loadFiles(); }
+});
+function closePlayer() { $("audio").pause(); $("player").classList.remove("on"); }
+
+// ---------- ライブ録音 ----------
+const livedlg = $("livedlg");
+function openLive() {
+  $("livest").innerHTML = S.stations.map((s) => `<option value="${esc(s.id)}" ${s.id === cur.station ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  livedlg.showModal();
+}
+async function startLive() {
+  try { await api("/api/live", { station: $("livest").value, minutes: +$("livemin").value }); }
+  catch (e) { alert(e.message); }
+  livedlg.close(); refresh(); showTab("jobs");
+}
+
+showTab(store("tab") || "programs");
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

@@ -5,11 +5,12 @@
 外部ライブラリ不要。
 
 使い方:
+  python3 radirec.py ui                             # ブラウザで操作する画面を開く
   python3 radirec.py stations                       # 自分のエリアの局一覧
   python3 radirec.py programs TBS [20261014]        # 番組表
   python3 radirec.py live TBS 60                    # 今から60分ライブ録音
   python3 radirec.py timefree TBS 202610140100 202610140300
-  python3 radirec.py auto                           # config.json のキーワードに一致した番組を自動録音
+  python3 radirec.py auto                           # config.json のキーワード・予約に一致した番組を自動録音
 """
 import argparse
 import base64
@@ -29,12 +30,21 @@ import xml.etree.ElementTree as ET
 AUTH_KEY = "bcd151073c03b352e1ef2fd66c32209da9ca0afa"  # pc_html5 公開キー
 UA = "Mozilla/5.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CONFIG = os.path.join(HERE, "config.json")
 JST = dt.timezone(dt.timedelta(hours=9))
 CHUNK_SEC = 300  # タイムフリーは5分単位で取得して結合する
 
 
+class RadikoError(RuntimeError):
+    pass
+
+
 def log(*a):
     print(dt.datetime.now(JST).strftime("[%Y-%m-%d %H:%M:%S]"), *a, flush=True)
+
+
+def now_str():
+    return dt.datetime.now(JST).strftime("%Y%m%d%H%M%S")
 
 
 def http(url, headers=None):
@@ -59,7 +69,7 @@ def authorize():
     })
     area = body.decode().split(",")[0].strip()
     if not area.startswith("JP"):
-        sys.exit("認証失敗: 日本国内からアクセスしてください")
+        raise RadikoError("認証失敗: 日本国内からアクセスしてください")
     return token, area
 
 
@@ -87,7 +97,7 @@ def playlist_base(station, timefree):
     for u in root.iter("url"):
         if u.get("timefree") == want and u.get("areafree") == "0":
             return u.findtext("playlist_create_url")
-    sys.exit(f"{station}: ストリームURLが見つかりません")
+    raise RadikoError(f"{station}: ストリームURLが見つかりません")
 
 
 # ---------------- 録音 ----------------
@@ -110,25 +120,25 @@ def out_path(outdir, station, ft, title=""):
     return os.path.join(outdir, name + ".m4a")
 
 
-def rec_live(station, minutes, outdir):
+def rec_live(station, minutes, outdir, title=""):
     token, _ = authorize()
     base = playlist_base(station, timefree=False)
     url = f"{base}?station_id={station}&l=15&lsid={secrets.token_hex(16)}&type=b"
-    now = dt.datetime.now(JST).strftime("%Y%m%d%H%M%S")
-    out = out_path(outdir, station, now)
+    out = out_path(outdir, station, now_str(), title)
     log(f"ライブ録音開始 {station} {minutes}分 -> {out}")
     ok = ffmpeg(token, url, out, duration=int(minutes * 60))
     log("完了" if ok else "失敗", out)
     return ok
 
 
-def rec_timefree(station, ft, to, outdir, title=""):
+def rec_timefree(station, ft, to, outdir, title="", progress=None):
     ft, to = ft.ljust(14, "0"), to.ljust(14, "0")
     token, _ = authorize()
     base = playlist_base(station, timefree=True)
     lsid = secrets.token_hex(16)
     t0 = dt.datetime.strptime(ft, "%Y%m%d%H%M%S")
     t1 = dt.datetime.strptime(to, "%Y%m%d%H%M%S")
+    total = int((t1 - t0).total_seconds())
     out = out_path(outdir, station, ft, title)
     log(f"タイムフリー録音 {station} {ft}-{to} -> {out}")
 
@@ -140,7 +150,7 @@ def rec_timefree(station, ft, to, outdir, title=""):
                 "seek": seek.strftime("%Y%m%d%H%M%S"), "l": CHUNK_SEC, "lsid": lsid, "type": "c",
             })
             part = os.path.join(tmp, f"{len(parts):04d}.m4a")
-            for attempt in range(3):
+            for _ in range(3):
                 if ffmpeg(token, f"{base}?{q}", part):
                     break
                 time.sleep(3)
@@ -149,38 +159,86 @@ def rec_timefree(station, ft, to, outdir, title=""):
                 return False
             parts.append(part)
             seek += dt.timedelta(seconds=CHUNK_SEC)
+            if progress:
+                progress(min(1.0, (seek - t0).total_seconds() / total))
         lst = os.path.join(tmp, "list.txt")
         with open(lst, "w") as f:
             f.writelines(f"file '{p}'\n" for p in parts)
-        total = int((t1 - t0).total_seconds())
         ok = subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
                              "-i", lst, "-t", str(total), "-c", "copy", out]).returncode == 0
     log("完了" if ok else "失敗", out)
     return ok
 
 
-# ---------------- 自動録音 ----------------
-def auto(config_path):
-    with open(config_path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    outdir = cfg.get("output_dir", os.path.join(HERE, "recordings"))
-    done_path = os.path.join(outdir, ".done.json")
-    os.makedirs(outdir, exist_ok=True)
-    done = set(json.load(open(done_path)) if os.path.exists(done_path) else [])
-    now = dt.datetime.now(JST).strftime("%Y%m%d%H%M%S")
+# ---------------- 設定・自動録音 ----------------
+def load_config(path=DEFAULT_CONFIG):
+    cfg = {"output_dir": "./recordings", "rules": [], "reservations": []}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            cfg.update(json.load(f))
+    return cfg
 
-    for rule in cfg["rules"]:
-        kws = [k.lower() for k in rule["keywords"]]
+
+def save_config(cfg, path=DEFAULT_CONFIG):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def resolve_outdir(cfg, config_path=DEFAULT_CONFIG):
+    return os.path.join(os.path.dirname(os.path.abspath(config_path)), cfg["output_dir"])
+
+
+def done_path(outdir):
+    return os.path.join(outdir, ".done.json")
+
+
+def load_done(outdir):
+    try:
+        with open(done_path(outdir)) as f:
+            return set(json.load(f))
+    except (OSError, ValueError):
+        return set()
+
+
+def mark_done(outdir, key):
+    done = load_done(outdir) | {key}
+    os.makedirs(outdir, exist_ok=True)
+    with open(done_path(outdir), "w") as f:
+        json.dump(sorted(done), f)
+
+
+def prog_key(station, ft):
+    return f"{station}_{ft}"
+
+
+def matches(rule, prog):
+    text = (prog["title"] + " " + prog["pfm"] + " " + prog["info"]).lower()
+    return any(k.lower() in text for k in rule["keywords"] if k)
+
+
+def pending_targets(cfg, done):
+    """放送が終わっていて未録音の対象番組（キーワード一致 + 予約）を返す。"""
+    now, seen, out = now_str(), set(done), []
+    for r in cfg.get("reservations", []):
+        if r["to"] <= now and prog_key(r["station"], r["ft"]) not in seen:
+            seen.add(prog_key(r["station"], r["ft"]))
+            out.append(r)
+    for rule in cfg.get("rules", []):
         for st in rule["stations"]:
             for p in weekly_programs(st):
-                key = f"{st}_{p['ft']}"
-                text = (p["title"] + " " + p["pfm"] + " " + p["info"]).lower()
-                if key in done or p["to"] > now or not any(k in text for k in kws):
-                    continue
-                if rec_timefree(st, p["ft"], p["to"], outdir, p["title"]):
-                    done.add(key)
-                    with open(done_path, "w") as f:
-                        json.dump(sorted(done), f)
+                key = prog_key(st, p["ft"])
+                if key not in seen and p["to"] <= now and matches(rule, p):
+                    seen.add(key)
+                    out.append(p)
+    return out
+
+
+def auto(config_path):
+    cfg = load_config(config_path)
+    outdir = resolve_outdir(cfg, config_path)
+    for p in pending_targets(cfg, load_done(outdir)):
+        if rec_timefree(p["station"], p["ft"], p["to"], outdir, p["title"]):
+            mark_done(outdir, prog_key(p["station"], p["ft"]))
 
 
 # ---------------- CLI ----------------
@@ -188,29 +246,37 @@ def main():
     ap = argparse.ArgumentParser(description="radiko 録音ツール")
     ap.add_argument("-o", "--outdir", default=os.path.join(HERE, "recordings"))
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("ui"); p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true")
     sub.add_parser("stations")
     p = sub.add_parser("programs"); p.add_argument("station"); p.add_argument("date", nargs="?")
     p = sub.add_parser("live"); p.add_argument("station"); p.add_argument("minutes", type=float)
     p = sub.add_parser("timefree"); p.add_argument("station")
     p.add_argument("ft", help="開始 YYYYMMDDHHMM"); p.add_argument("to", help="終了 YYYYMMDDHHMM")
-    p = sub.add_parser("auto"); p.add_argument("-c", "--config", default=os.path.join(HERE, "config.json"))
+    p = sub.add_parser("auto"); p.add_argument("-c", "--config", default=DEFAULT_CONFIG)
     a = ap.parse_args()
 
-    if a.cmd == "stations":
-        _, area = authorize()
-        print(f"エリア: {area}")
-        for sid, name in stations(area):
-            print(f"  {sid:12} {name}")
-    elif a.cmd == "programs":
-        for p in weekly_programs(a.station):
-            if not a.date or p["ft"].startswith(a.date):
-                print(f"{p['ft'][:12]}-{p['to'][8:12]}  {p['title']}  / {p['pfm']}")
-    elif a.cmd == "live":
-        sys.exit(0 if rec_live(a.station, a.minutes, a.outdir) else 1)
-    elif a.cmd == "timefree":
-        sys.exit(0 if rec_timefree(a.station, a.ft, a.to, a.outdir) else 1)
-    elif a.cmd == "auto":
-        auto(a.config)
+    try:
+        if a.cmd == "ui":
+            import ui
+            ui.serve(a.port, open_browser=not a.no_browser)
+        elif a.cmd == "stations":
+            _, area = authorize()
+            print(f"エリア: {area}")
+            for sid, name in stations(area):
+                print(f"  {sid:12} {name}")
+        elif a.cmd == "programs":
+            for p in weekly_programs(a.station):
+                if not a.date or p["ft"].startswith(a.date):
+                    print(f"{p['ft'][:12]}-{p['to'][8:12]}  {p['title']}  / {p['pfm']}")
+        elif a.cmd == "live":
+            sys.exit(0 if rec_live(a.station, a.minutes, a.outdir) else 1)
+        elif a.cmd == "timefree":
+            sys.exit(0 if rec_timefree(a.station, a.ft, a.to, a.outdir) else 1)
+        elif a.cmd == "auto":
+            auto(a.config)
+    except RadikoError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":
