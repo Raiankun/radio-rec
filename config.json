@@ -11,5 +11,74 @@
       ]
     }
   ],
-  "reservations": []
+  "reservations": [],
+  "streams": [
+    {
+      "id": "hawaiianrainbow",
+      "name": "Hawaiian Rainbow",
+      "tz": "Pacific/Honolulu",
+      "url": "http://stream1.hawaiianrainbow.com/"
+    },
+    {
+      "id": "koko963",
+      "name": "KOKO-LP 96.3",
+      "tz": "Pacific/Honolulu",
+      "url": "http://s2.yesstreaming.net:7031/stream"
+    },
+    {
+      "id": "kumu947",
+      "name": "94.7 KUMU",
+      "tz": "Pacific/Honolulu",
+      "url": "https://pacificmedia.cdnstream1.com/2783_128.mp3"
+    },
+    {
+      "id": "kmno",
+      "name": "KMNO Mana'o Radio（マウイ）",
+      "tz": "Pacific/Honolulu",
+      "url": "https://kmno.streamguys1.com/live"
+    },
+    {
+      "id": "kkcr",
+      "name": "KKCR（カウアイ）",
+      "tz": "Pacific/Honolulu",
+      "url": "http://s8.phx.icastcenter.com:9000/stream"
+    },
+    {
+      "id": "hpr1",
+      "name": "Hawaii Public Radio HPR-1",
+      "tz": "Pacific/Honolulu",
+      "url": "http://khpr-ice.streamguys1.com/khpr2"
+    },
+    {
+      "id": "jazz24",
+      "name": "Jazz24",
+      "tz": "America/Los_Angeles",
+      "url": "https://knkx-live-a.edge.audiocdn.com/6285_256k"
+    },
+    {
+      "id": "kjazz",
+      "name": "KJAZZ 88.1",
+      "tz": "America/Los_Angeles",
+      "url": "https://streaming.live365.com/a49833"
+    },
+    {
+      "id": "wbgo",
+      "name": "WBGO Jazz 88.3",
+      "tz": "America/New_York",
+      "url": "https://ais-sa8.cdnstream1.com/3629_128.mp3"
+    },
+    {
+      "id": "tsfjazz",
+      "name": "TSF Jazz",
+      "tz": "Europe/Paris",
+      "url": "http://tsfjazz.ice.infomaniak.ch/tsfjazz-high.mp3"
+    },
+    {
+      "id": "swissjazz",
+      "name": "Radio Swiss Jazz",
+      "tz": "Europe/Zurich",
+      "url": "http://stream.srg-ssr.ch/m/rsj/mp3_128"
+    }
+  ],
+  "schedules": []
 }

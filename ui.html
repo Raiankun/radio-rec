@@ -86,9 +86,16 @@ h2 { font-size: 15px; margin: 0 0 10px; }
 .player .inner { max-width: 960px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
 .player audio { flex: 1; min-width: 0; }
 .player .name { font-size: 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); align-items: center; }
+.st-row:first-child { border-top: 0; }
+.form { display: grid; grid-template-columns: 90px 1fr; gap: 8px 10px; align-items: center; margin-top: 10px; }
+.form label { color: var(--muted); font-size: 12px; }
+.form input, .form select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; }
+.form .full { grid-column: 1 / -1; }
 dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); padding: 18px; max-width: 90vw; }
 dialog::backdrop { background: rgba(0,0,0,.35); }
 @media (max-width: 600px) {
+  .form { grid-template-columns: 1fr; }
   .prog { grid-template-columns: 1fr; gap: 4px; }
   .actions { justify-content: flex-start; }
   nav { margin-left: 0; width: 100%; overflow-x: auto; }
@@ -103,6 +110,7 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
   <nav id="nav">
     <button data-tab="programs" class="on">番組表</button>
     <button data-tab="auto">自動録音</button>
+    <button data-tab="intl">海外局</button>
     <button data-tab="jobs">録音状況<span class="count" id="jobcount" hidden></span></button>
     <button data-tab="files">録音済み</button>
   </nav>
@@ -145,6 +153,39 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
     </div>
   </section>
 
+  <section id="tab-intl" hidden>
+    <div class="card">
+      <h2>海外局</h2>
+      <p class="muted">ネット配信している局をそのまま録音します（無劣化）。radiko のタイムフリーのような「あとから録音」は無いので、ライブ録音か時間指定の予約で録ります。</p>
+      <div id="streams"></div>
+      <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">＋ 局を追加</summary>
+        <div class="form">
+          <label>局の名前</label><input type="text" id="st-name" placeholder="例: KCCN FM100">
+          <label>配信URL</label><input type="text" id="st-url" placeholder="https://…（.mp3 / .aac / .m3u8 など）">
+          <label>現地の時間帯</label><select id="st-tz"></select>
+          <div class="full row"><button class="btn" onclick="addStream()">確認して追加</button><span class="muted" id="st-msg"></span></div>
+        </div>
+      </details>
+    </div>
+    <div class="card">
+      <h2>時間指定の予約</h2>
+      <p class="muted">時刻は日本時間です。UI（radirec.py ui）を起動している間だけ録音されます。</p>
+      <div id="schedules"></div>
+      <details style="margin-top:10px" id="sc-add"><summary class="muted" style="cursor:pointer">＋ 予約を追加</summary>
+        <div class="form">
+          <label>局</label><select id="sc-stream"></select>
+          <label>くり返し</label><div class="chips" id="sc-days"></div>
+          <label>または日付</label><input type="date" id="sc-date">
+          <label>開始（日本時間）</label><input type="time" id="sc-time" value="21:00">
+          <label>長さ（分）</label><input type="number" id="sc-min" value="60" min="1">
+          <label>名前（任意）</label><input type="text" id="sc-title" placeholder="例: 朝のハワイアン">
+          <div class="full muted" id="sc-local"></div>
+          <div class="full row"><button class="btn" onclick="addSchedule()">予約する</button><span class="muted" id="sc-msg"></span></div>
+        </div>
+      </details>
+    </div>
+  </section>
+
   <section id="tab-jobs" hidden>
     <div class="card" id="jobs"></div>
   </section>
@@ -169,6 +210,17 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
   <div class="row" style="justify-content:flex-end">
     <button class="btn plain" onclick="livedlg.close()">キャンセル</button>
     <button class="btn" onclick="startLive()">録音開始</button>
+  </div>
+</dialog>
+
+<dialog id="stdlg">
+  <h2 id="stdlg-title">海外局を録音</h2>
+  <div class="row" style="margin:10px 0">
+    今から <input type="number" id="stdlg-min" value="60" min="1" style="width:80px"> 分
+  </div>
+  <div class="row" style="justify-content:flex-end">
+    <button class="btn plain" onclick="stdlg.close()">キャンセル</button>
+    <button class="btn" onclick="startStream()">録音開始</button>
   </div>
 </dialog>
 
@@ -200,7 +252,7 @@ function radikoDay(ft) {
   const dt = new Date(+ft.slice(0, 4), +ft.slice(4, 6) - 1, +ft.slice(6, 8) - 1);
   return `${dt.getFullYear()}${String(dt.getMonth() + 1).padStart(2, "0")}${String(dt.getDate()).padStart(2, "0")}`;
 }
-function stName(id) { return (S.stations.find((s) => s.id === id) || {}).name || id; }
+function stName(id) { return (S.stations.find((s) => s.id === id) || (S.streams || []).find((s) => s.id === id) || {}).name || id; }
 
 // ---------- タブ ----------
 $("nav").addEventListener("click", (e) => {
@@ -213,6 +265,7 @@ function showTab(t) {
   store("tab", t);
   if (t === "files") loadFiles();
   if (t === "auto") renderAuto();
+  if (t === "intl") renderIntl();
 }
 
 // ---------- 状態 ----------
@@ -226,6 +279,7 @@ async function refresh() {
   renderStations();
   renderJobs();
   if (!rulesDirty && !$("tab-auto").hidden) renderAuto();
+  if (!$("tab-intl").hidden) renderIntl(true);
   const sig = S.jobs.map((j) => j.id + j.status).join();
   if (sig !== lastJobSig) {
     if (lastJobSig) { if (cur.query) runSearch(true); else if (cur.station) loadPrograms(cur.station, true); if (!$("tab-files").hidden) loadFiles(); }
@@ -377,6 +431,113 @@ async function saveRules() {
 }
 async function runAuto() { await api("/api/auto/run", {}); $("autoinfo").textContent = "チェック中…"; setTimeout(refresh, 3000); }
 
+// ---------- 海外局 ----------
+const DAYS = "月火水木金土日";  // config の days は 0=月曜
+const TZS = [["Pacific/Honolulu", "ハワイ"], ["America/Los_Angeles", "米国西海岸"], ["America/Chicago", "米国中部"],
+  ["America/New_York", "米国東海岸"], ["Europe/London", "イギリス"], ["Europe/Paris", "フランス"],
+  ["Europe/Zurich", "スイス"], ["Asia/Tokyo", "日本"], ["", "指定しない"]];
+let intlSig = "", scDays = new Set();
+function tzLabel(tz) { return (TZS.find((t) => t[0] === tz) || [tz, tz])[1]; }
+function localFmt(tz, d) {
+  return new Intl.DateTimeFormat("ja-JP", { timeZone: tz, month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" }).format(d);
+}
+function jst(ymd, time) { return new Date(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T${time.padStart(5, "0")}:00+09:00`); }
+function jstYmd(d) { return new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, ""); }
+function nextStart(sc) {  // 次の開始時刻（日本時間）
+  if (sc.date) return jst(sc.date, sc.time);
+  for (let i = 0; i < 8; i++) {
+    const d = new Date(Date.now() + i * 864e5), ymd = jstYmd(d);
+    const wd = (jst(ymd, "12:00").getUTCDay() + 6) % 7;
+    const t = jst(ymd, sc.time);
+    if (sc.days.includes(wd) && t.getTime() + sc.minutes * 6e4 > Date.now()) return t;
+  }
+  return null;
+}
+function renderIntl(quiet) {
+  const sig = JSON.stringify([S.streams, S.schedules]);
+  if (quiet && sig === intlSig) return;
+  intlSig = sig;
+  const streams = S.streams || [];
+  $("streams").innerHTML = streams.map((st, i) => `<div class="st-row">
+      <div><div class="title">${esc(st.name)}</div>
+        <div class="muted">${st.tz ? `${esc(tzLabel(st.tz))}・現地 ${localFmt(st.tz, new Date())}` : esc(st.url)}</div></div>
+      <div class="actions">
+        <button class="btn ghost" data-a="listen" data-i="${i}">▶ 試聴</button>
+        <button class="btn" data-a="rec" data-i="${i}">● 録音</button>
+        <button class="btn plain" data-a="del" data-i="${i}">削除</button></div></div>`).join("")
+    || '<div class="empty">局が登録されていません</div>';
+  $("st-tz").innerHTML = TZS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  const sel = $("sc-stream").value;
+  $("sc-stream").innerHTML = streams.map((st) => `<option value="${esc(st.id)}">${esc(st.name)}</option>`).join("");
+  if (sel) $("sc-stream").value = sel;
+  $("sc-days").innerHTML = [...DAYS].map((d, i) => `<button class="chip ${scDays.has(i) ? "on" : ""}" data-d="${i}">${d}</button>`).join("");
+  const scs = S.schedules || [];
+  $("schedules").innerHTML = scs.map((sc, i) => {
+    const st = streams.find((s) => s.id === sc.stream) || { name: sc.stream };
+    const rep = sc.date ? dayLabel(sc.date) : sc.days.length === 7 ? "毎日" : "毎週 " + sc.days.map((d) => DAYS[d]).join("・");
+    const nx = nextStart(sc);
+    const local = nx && st.tz ? `・現地 ${localFmt(st.tz, nx)}` : "";
+    return `<div class="st-row"><div><div class="title">${esc(sc.title || st.name)}</div>
+      <div class="muted">${esc(st.name)}・${rep} ${esc(sc.time)}〜（${sc.minutes}分）${local}${nx ? "" : "・終了済み"}</div></div>
+      <button class="btn plain" data-del="${i}">解除</button></div>`;
+  }).join("") || '<div class="empty">予約はありません</div>';
+  showLocal();
+}
+function showLocal() {
+  const st = (S.streams || []).find((s) => s.id === $("sc-stream").value);
+  const t = $("sc-time").value, date = $("sc-date").value.replace(/-/g, "");
+  if (!st || !st.tz || !t) { $("sc-local").textContent = ""; return; }
+  const d = jst(date || jstYmd(new Date()), t);
+  $("sc-local").textContent = `${tzLabel(st.tz)}の現地時間では ${localFmt(st.tz, d)} 開始${date ? "" : "（今日の場合）"}`;
+}
+["sc-stream", "sc-time", "sc-date"].forEach((id) => $(id).addEventListener("input", showLocal));
+$("sc-days").addEventListener("click", (e) => {
+  const c = e.target.closest(".chip"); if (!c) return;
+  const d = +c.dataset.d; scDays.has(d) ? scDays.delete(d) : scDays.add(d); c.classList.toggle("on");
+});
+let stTarget = null;
+$("streams").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-a]"); if (!b) return;
+  const st = S.streams[+b.dataset.i];
+  if (b.dataset.a === "listen") { $("audio").src = st.url; $("playname").textContent = st.name + "（ライブ）"; $("player").classList.add("on"); $("audio").play(); }
+  if (b.dataset.a === "rec") { stTarget = st; $("stdlg-title").textContent = st.name + " を録音"; stdlg.showModal(); }
+  if (b.dataset.a === "del" && confirm(st.name + " を削除しますか？（この局の予約も録音されなくなります）")) {
+    await api("/api/streams", { streams: S.streams.filter((x) => x !== st) }); await refresh(); renderIntl();
+  }
+});
+const stdlg = $("stdlg");
+async function startStream() {
+  try { await api("/api/stream/rec", { stream: stTarget.id, minutes: +$("stdlg-min").value }); }
+  catch (e) { alert(e.message); }
+  stdlg.close(); refresh(); showTab("jobs");
+}
+async function addStream() {
+  const name = $("st-name").value.trim(), url = $("st-url").value.trim();
+  if (!name || !/^https?:\/\//.test(url)) { $("st-msg").textContent = "名前と http(s):// で始まるURLを入れてください"; return; }
+  $("st-msg").textContent = "配信につながるか確認中…";
+  const r = await api("/api/stream/probe", { url });
+  if (!r.ok) { $("st-msg").textContent = "配信につながりませんでした。URLを確認してください"; return; }
+  await api("/api/streams", { streams: [...S.streams, { name, url, tz: $("st-tz").value }] });
+  $("st-msg").textContent = `追加しました（${r.codec}${r.kbps ? " " + r.kbps + "kbps" : ""}）`;
+  $("st-name").value = $("st-url").value = "";
+  await refresh(); renderIntl();
+}
+async function addSchedule() {
+  const date = $("sc-date").value, sc = {
+    stream: $("sc-stream").value, time: $("sc-time").value, minutes: +$("sc-min").value, title: $("sc-title").value,
+    ...(date ? { date } : { days: [...scDays] }),
+  };
+  if (!sc.stream || !sc.time) { $("sc-msg").textContent = "局と時刻を選んでください"; return; }
+  if (!date && !scDays.size) { $("sc-msg").textContent = "曜日か日付を選んでください"; return; }
+  await api("/api/schedules", { schedules: [...S.schedules, sc] });
+  $("sc-msg").textContent = "予約しました"; $("sc-title").value = ""; $("sc-date").value = ""; scDays.clear();
+  await refresh(); renderIntl();
+}
+$("schedules").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-del]"); if (!b) return;
+  await api("/api/schedules", { schedules: S.schedules.filter((_, i) => i !== +b.dataset.del) }); await refresh(); renderIntl();
+});
+
 // ---------- 録音状況 ----------
 function renderJobs() {
   const running = S.jobs.filter((j) => j.status === "running" || j.status === "queued").length;
@@ -384,7 +545,8 @@ function renderJobs() {
   const label = { queued: ["待機中", "b-info"], running: ["録音中", "b-warn"], done: ["完了", "b-ok"], failed: ["失敗", "b-acc"] };
   $("jobs").innerHTML = S.jobs.map((j) => {
     const [l, c] = label[j.status];
-    const when = j.kind === "live" ? `ライブ ${j.minutes}分・${hm(j.ft)}開始` : `タイムフリー・${dayLabel(j.ft.slice(0, 8))} ${hm(j.ft)}–${hm(j.to)}`;
+    const when = j.kind === "stream" ? `${esc(j.label || "海外局")} ${j.minutes}分・${hm(j.ft)}開始`
+      : j.kind === "live" ? `ライブ ${j.minutes}分・${hm(j.ft)}開始` : `タイムフリー・${dayLabel(j.ft.slice(0, 8))} ${hm(j.ft)}–${hm(j.to)}`;
     return `<div class="job"><div><span class="title">${esc(j.title || stName(j.station))}</span><span class="badge ${c}">${l}</span>
       <div class="muted">${esc(stName(j.station))}・${when}${j.error ? "・" + esc(j.error) : ""}</div></div>
       <div class="muted">${j.status === "running" ? Math.round(j.progress * 100) + "%" : ""}</div>
@@ -396,7 +558,7 @@ function renderJobs() {
 async function loadFiles() {
   const files = await api("/api/recordings");
   $("files").innerHTML = files.map((f) => `<div class="file">
-      <div><div class="title">${esc(f.name.replace(/\.m4a$/, ""))}</div><div class="muted">${(f.size / 1048576).toFixed(1)} MB</div></div>
+      <div><div class="title">${esc(f.name.replace(/\.(m4a|mp3)$/, ""))}</div><div class="muted">${(f.size / 1048576).toFixed(1)} MB</div></div>
       <div class="actions"><button class="btn ghost" data-play="${esc(f.name)}">▶ 再生</button>
       <a class="btn plain" href="/rec/${encodeURIComponent(f.name)}?dl=1" download="${esc(f.name)}">↓ ダウンロード</a>
       <button class="btn plain" data-delf="${esc(f.name)}">削除</button></div></div>`).join("")

@@ -20,6 +20,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -361,9 +362,136 @@ def fix_sbr(path):
     return True
 
 
+# ---------------- 海外局（ネット配信） ----------------
+# radiko と違って認証もタイムフリーも無いので、配信 URL をそのまま ffmpeg で録る。
+# 録音は配信データのコピー（無劣化）。MP3 は .mp3、AAC は .m4a で保存する。
+DEFAULT_STREAMS = [
+    {"id": "hawaiianrainbow", "name": "Hawaiian Rainbow", "tz": "Pacific/Honolulu",
+     "url": "http://stream1.hawaiianrainbow.com/"},
+    {"id": "koko963", "name": "KOKO-LP 96.3", "tz": "Pacific/Honolulu",
+     "url": "http://s2.yesstreaming.net:7031/stream"},
+    {"id": "kumu947", "name": "94.7 KUMU", "tz": "Pacific/Honolulu",
+     "url": "https://pacificmedia.cdnstream1.com/2783_128.mp3"},
+    {"id": "kmno", "name": "KMNO Mana'o Radio（マウイ）", "tz": "Pacific/Honolulu",
+     "url": "https://kmno.streamguys1.com/live"},
+    {"id": "kkcr", "name": "KKCR（カウアイ）", "tz": "Pacific/Honolulu",
+     "url": "http://s8.phx.icastcenter.com:9000/stream"},
+    {"id": "hpr1", "name": "Hawaii Public Radio HPR-1", "tz": "Pacific/Honolulu",
+     "url": "http://khpr-ice.streamguys1.com/khpr2"},
+    {"id": "jazz24", "name": "Jazz24", "tz": "America/Los_Angeles",
+     "url": "https://knkx-live-a.edge.audiocdn.com/6285_256k"},
+    {"id": "kjazz", "name": "KJAZZ 88.1", "tz": "America/Los_Angeles",
+     "url": "https://streaming.live365.com/a49833"},
+    {"id": "wbgo", "name": "WBGO Jazz 88.3", "tz": "America/New_York",
+     "url": "https://ais-sa8.cdnstream1.com/3629_128.mp3"},
+    {"id": "tsfjazz", "name": "TSF Jazz", "tz": "Europe/Paris",
+     "url": "http://tsfjazz.ice.infomaniak.ch/tsfjazz-high.mp3"},
+    {"id": "swissjazz", "name": "Radio Swiss Jazz", "tz": "Europe/Zurich",
+     "url": "http://stream.srg-ssr.ch/m/rsj/mp3_128"},
+]
+
+
+def probe_stream(url):
+    """配信の (コーデック, ビットレートkbps) を返す。つながらなければ None。"""
+    r = subprocess.run(["ffprobe", "-v", "error", "-rw_timeout", "15000000", "-select_streams", "a:0",
+                        "-show_entries", "stream=codec_name,bit_rate", "-of", "csv=p=0", url],
+                       capture_output=True, text=True)
+    parts = r.stdout.strip().splitlines()[0].split(",") if r.stdout.strip() else []
+    if not parts or not parts[0]:
+        return None
+    kbps = int(parts[1]) // 1000 if len(parts) > 1 and parts[1].isdigit() else None
+    return parts[0], kbps
+
+
+def rec_stream(stream, minutes, outdir, title="", progress=None):
+    """ネット配信を minutes 分録音する。途中で切れたら終了時刻までつなぎ直し、最後に1本にまとめる。"""
+    info = probe_stream(stream["url"])
+    if not info:
+        log("配信につながりません", stream["name"], stream["url"])
+        return False
+    codec = info[0]
+    ext = ".mp3" if codec == "mp3" else ".m4a"
+    out = os.path.splitext(out_path(outdir, stream["id"], now_str(), title))[0] + ext
+    copy = ["-vn", "-c:a", "copy"] + (["-bsf:a", "aac_adtstoasc"] if codec == "aac" else [])
+    start, deadline = time.time(), time.time() + minutes * 60
+    log(f"海外局録音開始 {stream['name']} {minutes}分 ({codec}) -> {out}")
+    with tempfile.TemporaryDirectory() as tmp:
+        parts, fails = [], 0
+        while time.time() < deadline - 2 and fails < 10:
+            part = os.path.join(tmp, f"{len(parts):03d}{ext}")
+            # 長さは -t ではなく実時間で区切る（接続直後にまとめて送られてくる数秒分で
+            # -t が早く満たされてしまうため）。SIGINT なら ffmpeg はファイルを正しく閉じる。
+            cmd = ["ffmpeg", "-loglevel", "error", "-y", "-rw_timeout", "30000000",
+                   "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "30",
+                   "-i", stream["url"]] + copy + [part]
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
+            while proc.poll() is None and time.time() < deadline:
+                if progress:
+                    progress(min(0.99, (time.time() - start) / (minutes * 60)))
+                time.sleep(1)
+            if proc.poll() is None:
+                proc.send_signal(signal.SIGINT)
+                try:
+                    proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            if os.path.exists(part) and os.path.getsize(part) > 0:
+                parts.append(part)
+                fails = 0
+            else:
+                fails += 1
+                time.sleep(5)
+            if time.time() < deadline - 2:
+                log("配信が途切れたのでつなぎ直します", stream["name"])
+        if not parts:
+            log("失敗", out)
+            return False
+        if len(parts) == 1:
+            shutil.move(parts[0], out)
+        else:
+            lst = os.path.join(tmp, "list.txt")
+            with open(lst, "w") as f:
+                f.writelines(f"file '{p}'\n" for p in parts)
+            if subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
+                               "-i", lst, "-c", "copy", out]).returncode != 0:
+                log("失敗", out)
+                return False
+    if ext == ".m4a":
+        fix_sbr(out)
+    log("完了", out)
+    return True
+
+
+def find_stream(cfg, sid):
+    return next((s for s in cfg.get("streams", []) if s["id"] == sid), None)
+
+
+def due_schedules(cfg, now=None):
+    """いま録音を始めるべき予約を (予約, 開始時刻, 残り分数) で返す。
+    予約は日本時間で {"stream", "time": "HH:MM", "minutes", "days": [0=月..6=日] または "date": "YYYYMMDD"}。
+    開始時刻を過ぎていても終了前なら残りの時間だけ録る。"""
+    now = now or dt.datetime.now(JST)
+    out = []
+    for sc in cfg.get("schedules", []):
+        hh, mm = map(int, sc["time"].split(":"))
+        for back in (0, 1):  # 日付をまたぐ番組のため前日開始分も見る
+            day = (now - dt.timedelta(days=back)).date()
+            if sc.get("date"):
+                if day.strftime("%Y%m%d") != sc["date"]:
+                    continue
+            elif day.weekday() not in sc.get("days", []):
+                continue
+            start = dt.datetime(day.year, day.month, day.day, hh, mm, tzinfo=JST)
+            end = start + dt.timedelta(minutes=sc["minutes"])
+            if start <= now < end - dt.timedelta(minutes=1):
+                out.append((sc, start, (end - now).total_seconds() / 60))
+    return out
+
+
 # ---------------- 設定・自動録音 ----------------
 def load_config(path=DEFAULT_CONFIG):
-    cfg = {"output_dir": "./recordings", "rules": [], "reservations": []}
+    cfg = {"output_dir": "./recordings", "rules": [], "reservations": [],
+           "streams": [dict(s) for s in DEFAULT_STREAMS], "schedules": []}
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             cfg.update(json.load(f))
@@ -445,6 +573,10 @@ def main():
     p = sub.add_parser("timefree"); p.add_argument("station")
     p.add_argument("ft", help="開始 YYYYMMDDHHMM"); p.add_argument("to", help="終了 YYYYMMDDHHMM")
     p = sub.add_parser("auto"); p.add_argument("-c", "--config", default=DEFAULT_CONFIG)
+    p = sub.add_parser("stream", help="海外局を今から録音（局IDは streams で確認）")
+    p.add_argument("stream_id"); p.add_argument("minutes", type=float)
+    p.add_argument("-c", "--config", default=DEFAULT_CONFIG)
+    p = sub.add_parser("streams"); p.add_argument("-c", "--config", default=DEFAULT_CONFIG)
     a = ap.parse_args()
 
     try:
@@ -466,6 +598,14 @@ def main():
             sys.exit(0 if rec_timefree(a.station, a.ft, a.to, a.outdir) else 1)
         elif a.cmd == "auto":
             auto(a.config)
+        elif a.cmd == "streams":
+            for s in load_config(a.config)["streams"]:
+                print(f"  {s['id']:16} {s['name']}  {s['url']}")
+        elif a.cmd == "stream":
+            st = find_stream(load_config(a.config), a.stream_id)
+            if not st:
+                sys.exit(f"局 {a.stream_id} が config.json の streams にありません")
+            sys.exit(0 if rec_stream(st, a.minutes, a.outdir) else 1)
     except RadikoError as e:
         sys.exit(str(e))
 

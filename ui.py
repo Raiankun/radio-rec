@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import queue
+import re
 import threading
 import time
 import traceback
@@ -20,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import radirec as rr
 
 AUTO_INTERVAL = 30 * 60
+AUDIO_EXTS = (".m4a", ".mp3")
 HTML = os.path.join(rr.HERE, "ui.html")
 
 lock = threading.Lock()
@@ -108,6 +110,76 @@ def start_live(station, minutes, title):
     return job
 
 
+def start_stream(sid, minutes, title, label=None):
+    st = rr.find_stream(cfg(), sid)
+    if not st:
+        raise ValueError(f"海外局 {sid} が登録されていません")
+    job = new_job("stream", sid, title or st["name"], ft=rr.now_str(), minutes=round(minutes, 1))
+    job["label"] = label or "海外局ライブ"
+
+    def fn():
+        return rr.rec_stream(st, minutes, outdir(), title, progress=lambda p: job.update(progress=p))
+    threading.Thread(target=run_job, args=(job, fn), daemon=True).start()
+    return job
+
+
+started_schedules = set()  # (予約のキー, 開始時刻) — 同じ回を二重に始めないため
+
+
+def schedule_key(sc):
+    return json.dumps({k: sc.get(k) for k in ("stream", "time", "minutes", "days", "date")}, sort_keys=True)
+
+
+def schedule_loop():
+    while True:
+        try:
+            for sc, start, left in rr.due_schedules(cfg()):
+                key = (schedule_key(sc), start.isoformat())
+                if key in started_schedules:
+                    continue
+                started_schedules.add(key)
+                rr.log(f"予約録音を開始 {sc['stream']} {sc['time']} 残り{left:.0f}分")
+                start_stream(sc["stream"], left, sc.get("title", ""), label="予約録音")
+        except Exception as e:  # noqa: BLE001
+            rr.log("予約チェック失敗:", e)
+        time.sleep(15)
+
+
+def save_streams(streams):
+    c, seen, out = cfg(), set(), []
+    for st in streams:
+        name, url = st.get("name", "").strip(), st.get("url", "").strip()
+        if not name or not url.startswith(("http://", "https://")):
+            continue
+        sid = st.get("id") or rr.safe(name).lower()[:24] or "stream"
+        base, n = sid, 2
+        while sid in seen:
+            sid, n = f"{base}{n}", n + 1
+        seen.add(sid)
+        out.append({"id": sid, "name": name, "url": url, "tz": st.get("tz") or ""})
+    c["streams"] = out
+    rr.save_config(c)
+
+
+def save_schedules(schedules):
+    c, out = cfg(), []
+    ids = {s["id"] for s in c["streams"]}
+    for sc in schedules:
+        if sc.get("stream") not in ids or not re.fullmatch(r"\d{1,2}:\d{2}", sc.get("time", "")):
+            continue
+        item = {"stream": sc["stream"], "time": sc["time"], "minutes": max(1, int(sc.get("minutes") or 60)),
+                "title": sc.get("title", "").strip()}
+        if sc.get("date"):
+            item["date"] = sc["date"].replace("-", "")
+        elif sc.get("days"):
+            item["days"] = sorted({int(d) for d in sc["days"] if 0 <= int(d) <= 6})
+        else:
+            continue
+        out.append(item)
+    c["schedules"] = out
+    rr.save_config(c)
+
+
 def auto_check():
     state["auto_last"] = rr.now_str()
     try:
@@ -144,6 +216,7 @@ def api_state():
     nxt = state["auto_next"]
     return {"area": state["area"], "stations": state["stations"], "error": state["error"],
             "jobs": js, "rules": c["rules"], "reservations": c["reservations"],
+            "streams": c["streams"], "schedules": c["schedules"],
             "auto_last": state["auto_last"],
             "auto_next_min": max(0, int((nxt - time.time()) / 60)) if nxt else None}
 
@@ -212,7 +285,7 @@ def api_recordings():
         return []
     files = []
     for name in os.listdir(d):
-        if name.endswith(".m4a"):
+        if name.endswith(AUDIO_EXTS):
             st = os.stat(os.path.join(d, name))
             files.append({"name": name, "size": st.st_size, "mtime": st.st_mtime})
     return sorted(files, key=lambda f: f["name"], reverse=True)
@@ -237,7 +310,7 @@ def save_rules(rules):
 
 def delete_recording(name):
     path = os.path.join(outdir(), os.path.basename(name))
-    if path.endswith(".m4a") and os.path.isfile(path):
+    if path.endswith(AUDIO_EXTS) and os.path.isfile(path):
         os.remove(path)
 
 
@@ -293,6 +366,18 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/live":
                 start_live(body["station"], float(body["minutes"]), body.get("title", ""))
                 self.send_json({"ok": True})
+            elif self.path == "/api/stream/rec":
+                start_stream(body["stream"], float(body["minutes"]), body.get("title", ""))
+                self.send_json({"ok": True})
+            elif self.path == "/api/streams":
+                save_streams(body["streams"])
+                self.send_json({"ok": True})
+            elif self.path == "/api/stream/probe":
+                info = rr.probe_stream(body["url"])
+                self.send_json({"ok": bool(info), "codec": info and info[0], "kbps": info and info[1]})
+            elif self.path == "/api/schedules":
+                save_schedules(body["schedules"])
+                self.send_json({"ok": True})
             elif self.path == "/api/reserve":
                 set_reservation(body, body.get("on", True))
                 self.send_json({"ok": True})
@@ -316,7 +401,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_file(self, name, download=False):
         path = os.path.join(outdir(), os.path.basename(name))
-        if not (path.endswith(".m4a") and os.path.isfile(path)):
+        if not (path.endswith(AUDIO_EXTS) and os.path.isfile(path)):
             return self.send_error(404)
         size = os.path.getsize(path)
         start, end = 0, size - 1
@@ -349,6 +434,7 @@ class Handler(BaseHTTPRequestHandler):
 def serve(port=8765, open_browser=True):
     threading.Thread(target=timefree_worker, daemon=True).start()
     threading.Thread(target=auto_loop, daemon=True).start()
+    threading.Thread(target=schedule_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     rr.log(f"radirec UI: {url}  （終了は Ctrl+C）")
