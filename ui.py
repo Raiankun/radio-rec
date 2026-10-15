@@ -11,8 +11,10 @@ import queue
 import threading
 import time
 import traceback
+import unicodedata
 import urllib.parse
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import radirec as rr
@@ -24,6 +26,8 @@ lock = threading.Lock()
 jobs = []  # 新しい順
 job_ids = itertools.count(1)
 tf_queue = queue.Queue()  # タイムフリーは1件ずつ順番に処理
+program_cache = {}  # station -> (取得時刻, 番組一覧)
+PROGRAM_TTL = 10 * 60
 state = {"area": None, "stations": [], "error": None, "auto_last": None, "auto_next": None}
 
 
@@ -159,6 +163,49 @@ def api_programs(station):
     return {"now": rr.now_str(), "programs": out}
 
 
+def cached_programs(station):
+    """週間番組表を局ごとに10分キャッシュする（検索で全局を何度も取りに行かないため）。"""
+    with lock:
+        hit = program_cache.get(station)
+    if hit and time.time() - hit[0] < PROGRAM_TTL:
+        return [dict(p) for p in hit[1]]
+    progs = list(rr.weekly_programs(station))
+    with lock:
+        program_cache[station] = (time.time(), progs)
+    return [dict(p) for p in progs]
+
+
+def norm(text):
+    """全角・半角や大文字・小文字の違いを無視して比べるための正規化。"""
+    return unicodedata.normalize("NFKC", text).lower()
+
+
+def api_search(query):
+    words = [norm(w) for w in query.split() if w]
+    if not words:
+        return {"now": rr.now_str(), "programs": []}
+    if not state["stations"]:
+        load_stations()
+    c, done, active = cfg(), rr.load_done(outdir()), active_keys()
+    reserved = {rr.prog_key(r["station"], r["ft"]) for r in c["reservations"]}
+    names = {s["id"]: s["name"] for s in state["stations"]}
+    ids = list(names)
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        tables = list(ex.map(lambda sid: (sid, cached_programs(sid)), ids))
+    out = []
+    for sid, progs in tables:
+        rules = [r for r in c["rules"] if sid in r["stations"]]
+        for p in progs:
+            text = norm(" ".join((p["title"], p["pfm"], p["info"], sid, names.get(sid, ""))))
+            if all(w in text for w in words):  # スペース区切りは AND（局名でも絞れる）
+                key = rr.prog_key(sid, p["ft"])
+                p.update(recorded=key in done, active=key in active, reserved=key in reserved,
+                         matched=any(rr.matches(r, p) for r in rules))
+                out.append(p)
+    out.sort(key=lambda p: p["ft"])
+    return {"now": rr.now_str(), "programs": out[:300]}
+
+
 def api_recordings():
     d = outdir()
     if not os.path.isdir(d):
@@ -222,10 +269,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(api_state())
             elif u.path == "/api/programs":
                 self.send_json(api_programs(q["station"]))
+            elif u.path == "/api/search":
+                self.send_json(api_search(q.get("q", "")))
             elif u.path == "/api/recordings":
                 self.send_json(api_recordings())
             elif u.path.startswith("/rec/"):
-                self.send_file(urllib.parse.unquote(u.path[5:]))
+                self.send_file(urllib.parse.unquote(u.path[5:]), download="dl" in q)
             else:
                 self.send_error(404)
         except Exception as e:  # noqa: BLE001
@@ -265,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.send_json({"error": str(e)}, 500)
 
-    def send_file(self, name):
+    def send_file(self, name, download=False):
         path = os.path.join(outdir(), os.path.basename(name))
         if not (path.endswith(".m4a") and os.path.isfile(path)):
             return self.send_error(404)
@@ -279,6 +328,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(206 if rng else 200)
         self.send_header("Content-Type", mimetypes.guess_type(path)[0] or "audio/mp4")
         self.send_header("Accept-Ranges", "bytes")
+        if download:
+            self.send_header("Content-Disposition",
+                             "attachment; filename*=UTF-8''" + urllib.parse.quote(os.path.basename(path)))
         self.send_header("Content-Length", str(end - start + 1))
         if rng:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")

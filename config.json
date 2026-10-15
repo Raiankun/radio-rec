@@ -3,19 +3,11 @@
   "rules": [
     {
       "stations": [
-        "TBS"
+        "FMO",
+        "KISSFMKOBE"
       ],
       "keywords": [
-        "JUNK"
-      ]
-    },
-    {
-      "stations": [
-        "LFR",
-        "QRR"
-      ],
-      "keywords": [
-        "オールナイトニッポン"
+        "村上春樹"
       ]
     }
   ],

@@ -19,6 +19,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif; }
 header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -53,8 +54,14 @@ main { max-width: 960px; margin: 0 auto; padding: 16px; }
 .b-warn { background: var(--warn-soft); color: var(--warn); }
 .b-acc { background: var(--accent-soft); color: var(--accent); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-button.btn { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px;
+button.btn, a.btn { text-decoration: none; display: inline-block; }
+button.btn, a.btn { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px;
   padding: 5px 12px; cursor: pointer; font: inherit; font-size: 13px; white-space: nowrap; }
+a.btn.plain { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 12px; font-size: 13px; white-space: nowrap; }
+.search { display: flex; gap: 8px; margin-bottom: 12px; }
+.search input { flex: 1; min-width: 0; }
+.prog .when { color: var(--muted); font-size: 12px; }
 button.btn.ghost { background: transparent; color: var(--accent); }
 button.btn.plain { background: transparent; color: var(--muted); border-color: var(--line); }
 button.btn:disabled { opacity: .45; cursor: default; }
@@ -106,6 +113,11 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 
   <section id="tab-programs">
     <div class="card">
+      <form class="search" id="searchform">
+        <input type="text" id="q" placeholder="番組名・出演者で検索（全局・過去1週間〜来週）" autocomplete="off">
+        <button class="btn" type="submit">検索</button>
+        <button class="btn plain" type="button" id="clearq" hidden>✕</button>
+      </form>
       <div class="chips" id="stations"></div>
       <div class="chips days" id="days"></div>
       <div id="proglist"><div class="empty">局を選んでください</div></div>
@@ -165,7 +177,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const WD = "日月火水木金土";
 let S = { stations: [], jobs: [], rules: [], reservations: [] };
-let cur = { station: null, day: null, data: null };
+let cur = { station: null, day: null, data: null, query: "" };
 let rulesDirty = false, lastJobSig = "";
 
 function store(k, v) { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch (e) {} return v; }
@@ -216,7 +228,7 @@ async function refresh() {
   if (!rulesDirty && !$("tab-auto").hidden) renderAuto();
   const sig = S.jobs.map((j) => j.id + j.status).join();
   if (sig !== lastJobSig) {
-    if (lastJobSig) { if (cur.station) loadPrograms(cur.station, true); if (!$("tab-files").hidden) loadFiles(); }
+    if (lastJobSig) { if (cur.query) runSearch(true); else if (cur.station) loadPrograms(cur.station, true); if (!$("tab-files").hidden) loadFiles(); }
     lastJobSig = sig;
   }
 }
@@ -225,7 +237,7 @@ async function reconnect() { await api("/api/reconnect", {}); refresh(); }
 function renderStations() {
   const el = $("stations");
   if (el.dataset.n == S.stations.length) {
-    el.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.id === cur.station));
+    el.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", !cur.query && c.dataset.id === cur.station));
     return;
   }
   el.dataset.n = S.stations.length;
@@ -237,6 +249,8 @@ function renderStations() {
 
 // ---------- 番組表 ----------
 async function loadPrograms(id, quiet) {
+  if (cur.query && !quiet) clearSearch(false);
+  if (cur.query) return runSearch(true);
   if (cur.station !== id) cur.day = null;
   cur.station = id; store("station", id);
   renderStations();
@@ -251,8 +265,29 @@ async function loadPrograms(id, quiet) {
 }
 
 function renderPrograms() {
-  const now = cur.data.now;
-  const list = cur.data.programs.filter((p) => radikoDay(p.ft) === cur.day);
+  renderList(cur.data.programs.filter((p) => radikoDay(p.ft) === cur.day), cur.data.now, false);
+}
+
+// ---------- 検索 ----------
+$("searchform").addEventListener("submit", (e) => { e.preventDefault(); cur.query = $("q").value.trim(); cur.query ? runSearch() : clearSearch(true); });
+$("clearq").onclick = () => clearSearch(true);
+async function runSearch(quiet) {
+  $("clearq").hidden = false; $("days").hidden = true;
+  document.querySelectorAll("#stations .chip").forEach((c) => c.classList.remove("on"));
+  if (!quiet) $("proglist").innerHTML = '<div class="empty">全局の番組表を検索中…</div>';
+  let data;
+  try { data = await api("/api/search?q=" + encodeURIComponent(cur.query)); }
+  catch (e) { $("proglist").innerHTML = `<div class="empty">検索失敗: ${esc(e.message)}</div>`; return; }
+  if (!cur.query) return;
+  renderList(data.programs, data.now, true);
+  if (!data.programs.length) $("proglist").innerHTML = `<div class="empty">「${esc(cur.query)}」に一致する番組はありません</div>`;
+}
+function clearSearch(reload) {
+  cur.query = ""; $("q").value = ""; $("clearq").hidden = true; $("days").hidden = false;
+  if (reload) cur.station ? loadPrograms(cur.station) : ($("proglist").innerHTML = '<div class="empty">局を選んでください</div>');
+}
+
+function renderList(list, now, withStation) {
   $("proglist").innerHTML = list.map((p, i) => {
     const past = p.to <= now, onair = p.ft <= now && now < p.to;
     let badges = "", acts = "";
@@ -268,8 +303,8 @@ function renderPrograms() {
       ? `<button class="btn plain" data-a="unres" data-i="${i}">予約解除</button>`
       : `<button class="btn ${onair ? "ghost" : ""}" data-a="res" data-i="${i}">${onair ? "放送後に全編録音" : "予約"}</button>`;
     return `<div class="prog ${onair ? "now" : ""}">
-      <div class="time">${hm(p.ft)}–${hm(p.to)}</div>
-      <div><div class="title">${esc(p.title)}${badges}</div><div class="pfm">${esc(p.pfm)}</div></div>
+      <div class="time">${withStation ? `<div class="when">${dayLabel(radikoDay(p.ft))}</div>` : ""}${hm(p.ft)}–${hm(p.to)}</div>
+      <div><div class="title">${esc(p.title)}${badges}</div><div class="pfm">${withStation ? esc(stName(p.station)) + (p.pfm ? "・" : "") : ""}${esc(p.pfm)}</div></div>
       <div class="actions">${acts}</div></div>`;
   }).join("") || '<div class="empty">番組がありません</div>';
   $("proglist").onclick = async (e) => {
@@ -285,7 +320,7 @@ function renderPrograms() {
         await api("/api/live", { station: p.station, minutes: Math.max(1, Math.ceil((end - Date.now()) / 60000)), title: p.title });
       }
     } catch (err) { alert(err.message); }
-    await refresh(); loadPrograms(cur.station, true);
+    await refresh(); cur.query ? runSearch(true) : loadPrograms(cur.station, true);
   };
 }
 
@@ -363,6 +398,7 @@ async function loadFiles() {
   $("files").innerHTML = files.map((f) => `<div class="file">
       <div><div class="title">${esc(f.name.replace(/\.m4a$/, ""))}</div><div class="muted">${(f.size / 1048576).toFixed(1)} MB</div></div>
       <div class="actions"><button class="btn ghost" data-play="${esc(f.name)}">▶ 再生</button>
+      <a class="btn plain" href="/rec/${encodeURIComponent(f.name)}?dl=1" download="${esc(f.name)}">↓ ダウンロード</a>
       <button class="btn plain" data-delf="${esc(f.name)}">削除</button></div></div>`).join("")
     || '<div class="empty">録音したファイルはまだありません</div>';
 }
